@@ -78,6 +78,37 @@ class HousesDataset(Dataset):
 		self.train_cat = Catalog.from_file(cat_path)
 		self.cols = {cols.id:cols for cols in self.train_cat.get_children()}
 
+		self.items_labels = {}
+
+		items_size = 0
+
+		for col in list(self.cols.keys()):
+			self.items_labels[str(col)] = {}
+			for ii in self.cols[col].get_all_items():
+				print("Init dataset : ", col,ii.id)
+				if "-labels" in str(ii.id ):
+					#rasterio.open(ii.make_asset_hrefs_absolute().assets['labels'].href).meta
+					gpd.read_file(ii.make_asset_hrefs_absolute().assets['labels'].href)
+					
+
+					one_item_label = self.cols[col].get_item(id=ii.id)
+					scene_labels_gdf = gpd.read_file(one_item_label.assets['labels'].href)
+					self.items_labels[str(col)][str(ii.id)] = scene_labels_gdf
+
+					items_size += sys.getsizeof(scene_labels_gdf)
+					print("Size sum :",convert_bytes(items_size))
+
+
+				else :
+					rasterio.open(ii.make_asset_hrefs_absolute().assets['image'].href).meta
+
+
+
+
+
+
+					
+
 	def __len__(self):
 		"""Give the number of images"""
 		return len(self.houses_frame)
@@ -92,7 +123,6 @@ class HousesDataset(Dataset):
 			[numpy.array] -- [The idx-th image ]
 		"""
 
-		t = time.time()
 
 
 		if torch.is_tensor(idx):
@@ -100,32 +130,12 @@ class HousesDataset(Dataset):
 
 
 		# Get the image
-		print("\n\n"+"-"*15)
-		t = print_time(t, "Init :")
-
 
 		scene_id = self.houses_frame['id'][idx]
 		col = self.houses_frame['col'][idx]
-		t0 = print_time(t, "Init 0 :")
-		item = None
-		for ii in self.cols[col].get_all_items():
-			if str(ii.id )== str(scene_id):
-				# print('ok')
-
-				rasterio.open(ii.make_asset_hrefs_absolute().assets['image'].href).meta
-				t0 = print_time(t0, "open :")
-				item = ii
-			if str(ii.id )== str(scene_id + "-labels"):
-				#rasterio.open(ii.make_asset_hrefs_absolute().assets['labels'].href).meta
-				gpd.read_file(ii.make_asset_hrefs_absolute().assets['labels'].href)
-				t0 = print_time(t0, "gpd :")
-				item_label = ii
-		t0 = print_time(t0, "Boucle :")
-		one_item = self.cols[col].get_item(id=item.id)
-		t0 = print_time(t0, "Item :")
+		one_item = self.cols[col].get_item(id=scene_id)
 
 		rst = rasterio.open(one_item.assets['image'].href)
-		t0 = print_time(t0, "rst :")
 
 		win_sz = 1024
 		x = self.houses_frame['pos_x'][idx]
@@ -134,32 +144,18 @@ class HousesDataset(Dataset):
 		window = Window(x, y, win_sz,win_sz) # 1024x1024 window starting at center of raster
 		win_arr = rst.read(window=window)
 		win_arr = np.moveaxis(win_arr,0,2)
-		t0 = print_time(t0, "window :")
 
 		win_box = box(*rasterio.windows.bounds(window, rst.meta['transform']))
 		win_box_gdf = gpd.GeoDataFrame(geometry=[win_box], crs=rst.meta['crs'])
 		win_box_gdf = win_box_gdf.to_crs({'init':'epsg:4326'}) # ignore FutureWarning for now, updating this arg to crs=4326 creates an error during gpd.sjoin()
 
-		t0 = print_time(t0, "winbox :")
-
-
-		t = print_time(t, "Get image :")
-
-		print("\n\n")
 		# Get labels
-		tl = time.time()
-		one_item_label = self.cols[col].get_item(id=item_label.id)
-		#one_item_label.to_dict()
-		tl = print_time(tl, "OneItem :")
-		scene_labels_gdf = gpd.read_file(one_item_label.assets['labels'].href)
-		print("Size of scene :",convert_bytes(sys.getsizeof(scene_labels_gdf)))
-		tl = print_time(tl, "Scene :")
+
+		scene_labels_gdf = self.items_labels[str(col)][str(scene_id)+ "-labels"]
 		gdf_chip = gpd.sjoin(scene_labels_gdf, win_box_gdf, how='inner', op='intersects')
-		tl = print_time(tl, "Chip :")
 
 		burn_val = 255
 		shapes = [(geom, burn_val) for geom in gdf_chip.geometry]
-		tl = print_time(tl, "Shapes :")
 		if shapes == []:
 			label_arr = np.zeros((win_sz,win_sz))
 			self.label_in = False
@@ -167,14 +163,11 @@ class HousesDataset(Dataset):
 			self.label_in = True
 			chip_tfm = rasterio.transform.from_bounds(*win_box_gdf.bounds.values[0], win_sz, win_sz)
 			label_arr = rasterize(shapes, (win_sz, win_sz), transform=chip_tfm, dtype='uint8')
-		tl = print_time(tl, "arr :")
 
 
 		sample = {'image': win_arr, 'labels': label_arr}
-		t = print_time(t, "Get labels :")
 		if self.transform:
 			sample = self.transform(sample)
-		t = print_time(t, "transform :")
 		return sample
 
 class ToTensor(object):
@@ -203,11 +196,9 @@ class Normalize(object):
 
 
 
-def print_time(t, text):
-	dt = time.time() - t
+def prin,t_time(t, text):
 	print(text, np.round(dt, 3), 's')
 	return time.time()
-
 
 def convert_bytes(size):
    for x in ['bytes', 'KB', 'MB', 'GB', 'TB']:
