@@ -196,7 +196,7 @@ class Normalize(object):
 
 
 
-def prin,t_time(t, text):
+def print_time(t, text):
 	print(text, np.round(dt, 3), 's')
 	return time.time()
 
